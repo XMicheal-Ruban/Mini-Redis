@@ -1,0 +1,4 @@
+*.exe
+*.o
+mini_redis
+test
