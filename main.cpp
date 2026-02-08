@@ -2,7 +2,8 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
-#include <thread>      // For Multi-threading
+#include <thread>
+#include <fstream>   // For Disk Persistence
 #include <winsock2.h> 
 #include <ws2tcpip.h>
 
@@ -10,12 +11,42 @@
 
 using namespace std;
 
+// In-memory storage
 unordered_map<string, string> database;
+
+// Function to save data to a file
+void save_to_disk() {
+    ofstream file("dump.rdb");
+    for (auto const& [key, val] : database) {
+        file << key << ":" << val << endl;
+    }
+    file.close();
+    cout << "[SYSTEM] Database saved to dump.rdb" << endl;
+}
+
+// Function to load data from a file on startup
+void load_from_disk() {
+    ifstream file("dump.rdb");
+    if (!file.is_open()) return;
+
+    string line;
+    while (getline(file, line)) {
+        size_t pos = line.find(":");
+        if (pos != string::npos) {
+            string key = line.substr(0, pos);
+            string val = line.substr(pos + 1);
+            database[key] = val;
+        }
+    }
+    file.close();
+    cout << "[SYSTEM] Previous data loaded from disk." << endl;
+}
 
 void send_response(SOCKET client_fd, string msg) {
     send(client_fd, msg.c_str(), (int)msg.length(), 0);
 }
 
+// RESP Parser
 vector<string> parse_resp(char* buffer) {
     vector<string> commands;
     if (buffer[0] != '*') return commands;
@@ -33,21 +64,13 @@ vector<string> parse_resp(char* buffer) {
     return commands;
 }
 
-// This function runs in a separate thread for each client
 void handle_client(SOCKET client_fd) {
-    cout << "[NEW CONNECTION] Client ID: " << client_fd << endl;
     char buffer[1024];
-
     while (true) {
         memset(buffer, 0, 1024);
         int bytes = recv(client_fd, buffer, 1024, 0);
         
-        if (bytes <= 0) {
-            cout << "[DISCONNECTED] Client ID: " << client_fd << endl;
-            break; 
-        }
-
-        cout << "[DATA RECEIVED] Raw: " << buffer << endl;
+        if (bytes <= 0) break; 
 
         vector<string> args = parse_resp(buffer);
         if (!args.empty()) {
@@ -64,6 +87,9 @@ void handle_client(SOCKET client_fd) {
                 } else {
                     send_response(client_fd, "$-1\r\n");
                 }
+            } else if (cmd == "SAVE") {
+                save_to_disk();
+                send_response(client_fd, "+OK\r\n");
             }
         }
     }
@@ -74,23 +100,24 @@ int main() {
     WSADATA wsaData;
     WSAStartup(MAKEWORD(2, 2), &wsaData);
 
+    // Load existing data before starting server
+    load_from_disk();
+
     SOCKET server_fd = socket(AF_INET, SOCK_STREAM, 0);
     sockaddr_in addr = {AF_INET, htons(6379), INADDR_ANY};
     
     bind(server_fd, (struct sockaddr*)&addr, sizeof(addr));
     listen(server_fd, SOMAXCONN);
     
-    cout << "Mini-Redis v2 (Multi-Threaded) running on port 6379..." << endl;
+    cout << "Mini-Redis v3 (Persistent) running on port 6379..." << endl;
 
     while (true) {
         SOCKET client_fd = accept(server_fd, NULL, NULL);
         if (client_fd != INVALID_SOCKET) {
-            // Launch a new thread for this client
             thread(handle_client, client_fd).detach();
         }
     }
 
-    closesocket(server_fd);
     WSACleanup();
     return 0;
 }
